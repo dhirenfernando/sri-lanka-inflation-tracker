@@ -1,30 +1,32 @@
 # Sri Lanka Inflation Tracker
 
-Tracks DCS headline CCPI, headline NCPI, and aggregate PPI. It includes historical charts, date filtering, recent observations, and CSV export.
+## Primary: static GitHub Pages dashboard
 
-## Setup
+The primary dashboard is `docs/index.html`. It tracks DCS headline CCPI, headline NCPI, and aggregate PPI with latest indicators, recent-history charts, range controls, filtered observations, and CSV export.
+
+Live static dashboard: set this URL after GitHub Pages is enabled.
+
+## Generate locally
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-```
-
-## Update data
-
-```bash
 .venv/bin/python update_data.py
+.venv/bin/python generate_dashboard.py
 ```
 
-## Run dashboard
+Open `docs/index.html` directly in a browser, or serve the `docs/` directory with any static web server.
+
+## Deployment and automatic refresh
+
+GitHub Actions checks DCS daily, refreshes `data/inflation.sqlite3`, regenerates `docs/index.html`, commits changed public data, and publishes `docs/` to GitHub Pages. In GitHub **Settings → Pages**, select **GitHub Actions** as the deployment source.
+
+## Optional local backup
+
+The original Streamlit application remains available locally:
 
 ```bash
 .venv/bin/streamlit run app.py
 ```
 
-The local SQLite database is `data/inflation.sqlite3`.
-
-## Deployment
-
-The repository includes a public DCS SQLite data snapshot so the dashboard displays data immediately after deployment. To refresh it, run the update command locally, then commit and push the updated database before redeploying.
-
-For Streamlit Community Cloud: create a GitHub repository, push this project, then create a new app with `app.py` as the entry point. No credentials are required.
+GitHub Pages visitors do not need Streamlit or Python at runtime.
