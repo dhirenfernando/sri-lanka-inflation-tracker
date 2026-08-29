@@ -22,13 +22,18 @@ class StaticDashboardTests(unittest.TestCase):
         self.assertIn('"index":223.4', page)
         self.assertIn('"index":241.97845167559007', page)
 
-    def test_generated_dashboard_has_static_controls_and_export(self):
+    def test_generated_dashboard_has_bounded_presets_and_export(self):
         with tempfile.TemporaryDirectory() as directory:
             page = generate(DATABASE, Path(directory) / "index.html").read_text(encoding="utf-8")
         self.assertIn('data-range="12"', page)
         self.assertIn('data-range="24" class="active"', page)
         self.assertIn('data-range="36"', page)
-        self.assertIn('data-range="all"', page)
+        self.assertNotIn('data-range="all"', page)
+        self.assertEqual(page.count('data-range="'), 3)
+        self.assertIn('const MAX_RANGE_MONTHS=36', page)
+        self.assertIn('monthShift(maxPeriod,rangeMonths)', page)
+        self.assertIn('earliestAllowed=clampMonth(monthShift(to,MAX_RANGE_MONTHS)', page)
+        self.assertIn('Custom range limited to ${MAX_RANGE_MONTHS} months.', page)
         self.assertIn('id="download"', page)
         self.assertIn('series,period,metric,value', page)
         self.assertIn("].join('\\n');", page)
@@ -38,6 +43,16 @@ class StaticDashboardTests(unittest.TestCase):
         self.assertIn('Current index:', page)
         self.assertIn('MoM:', page)
         self.assertIn('YoY:', page)
+
+    def test_one_resolved_range_is_shared_by_charts_table_and_csv(self):
+        with tempfile.TemporaryDirectory() as directory:
+            page = generate(DATABASE, Path(directory) / "index.html").read_text(encoding="utf-8")
+        self.assertIn('currentVisible=filtered(range)', page)
+        self.assertIn('renderCharts(currentVisible); renderTable(currentVisible);', page)
+        self.assertIn("...currentVisible.map(row=>", page)
+        self.assertIn("fromControl.value=range.from; toControl.value=range.to", page)
+        self.assertIn("fromControl.min=minPeriod; fromControl.max=maxPeriod", page)
+        self.assertIn("toControl.min=minPeriod; toControl.max=maxPeriod", page)
 
     def test_embedded_history_is_complete_and_has_no_prohibited_wording(self):
         rows = load_data(DATABASE)

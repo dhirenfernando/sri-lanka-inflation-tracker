@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT))
 from src.calculations import percent_change
 from src.dcs import _movement_rows, parse_ppi_workbook
 from src.storage import connect, upsert_index_rows
+from update_data import _derive_ppi
 
 FIXTURES = ROOT / "tests" / "fixtures"
 
@@ -24,10 +25,50 @@ class TrackerTests(unittest.TestCase):
         self.assertEqual((rows[-1]["period"], rows[-1]["index"], rows[-1]["yoy"]), ("2026-07-01", 223.4, 7.2))
 
     def test_ppi_fixture_latest_value(self):
-        rows = parse_ppi_workbook((FIXTURES / "ppi/ppi_june_2026.xlsx").read_bytes())
+        rows = _derive_ppi(parse_ppi_workbook((FIXTURES / "ppi/ppi_june_2026.xlsx").read_bytes()))
         self.assertEqual(rows[-1]["period"], "2026-06-01")
         self.assertAlmostEqual(rows[-1]["index"], 241.97845167559007)
+        self.assertAlmostEqual(rows[-1]["mom"], -1.1808713, places=6)
+        self.assertAlmostEqual(rows[-1]["yoy"], 1.3310099, places=6)
         self.assertEqual(max(row["period"] for row in rows), "2026-06-01")
+
+    def test_ppi_missing_previous_calendar_month_has_no_mom(self):
+        rows = _derive_ppi([
+            {"period": "2026-01-01", "index": 100.0},
+            {"period": "2026-03-01", "index": 120.0},
+        ])
+        self.assertIsNone(rows[-1]["mom"])
+
+    def test_ppi_missing_same_month_previous_year_has_no_yoy(self):
+        periods = [
+            "2025-01-01", "2025-02-01", "2025-04-01", "2025-05-01",
+            "2025-06-01", "2025-07-01", "2025-08-01", "2025-09-01",
+            "2025-10-01", "2025-11-01", "2025-12-01", "2026-01-01",
+            "2026-02-01", "2026-03-01",
+        ]
+        rows = _derive_ppi([{"period": period, "index": float(100 + position)} for position, period in enumerate(periods)])
+        march_2026 = next(row for row in rows if row["period"] == "2026-03-01")
+        self.assertIsNone(march_2026["yoy"])
+
+    def test_ppi_complete_calendar_comparators_calculate_changes(self):
+        rows = _derive_ppi([
+            {"period": "2025-03-01", "index": 100.0},
+            {"period": "2026-02-01", "index": 110.0},
+            {"period": "2026-03-01", "index": 121.0},
+        ])
+        march_2026 = rows[-1]
+        self.assertAlmostEqual(march_2026["mom"], 10.0)
+        self.assertAlmostEqual(march_2026["yoy"], 21.0)
+
+    def test_ppi_gap_never_uses_neighboring_observation_by_position(self):
+        rows = _derive_ppi([
+            {"period": "2025-03-01", "index": 80.0},
+            {"period": "2026-01-01", "index": 100.0},
+            {"period": "2026-03-01", "index": 120.0},
+        ])
+        march_2026 = rows[-1]
+        self.assertIsNone(march_2026["mom"])
+        self.assertAlmostEqual(march_2026["yoy"], 50.0)
 
     def test_percent_change(self):
         self.assertAlmostEqual(percent_change(110, 100), 10.0)
