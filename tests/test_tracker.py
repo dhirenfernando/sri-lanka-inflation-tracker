@@ -7,9 +7,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from src.calculations import percent_change
-from src.dcs import _movement_rows, parse_ppi_workbook
+from src.dcs import DcsError, _movement_rows, parse_ppi_workbook
 from src.storage import connect, upsert_index_rows
-from update_data import _derive_ppi
+from update_data import _derive_ppi, _validate_index_rows
 
 FIXTURES = ROOT / "tests" / "fixtures"
 
@@ -69,6 +69,19 @@ class TrackerTests(unittest.TestCase):
         march_2026 = rows[-1]
         self.assertIsNone(march_2026["mom"])
         self.assertAlmostEqual(march_2026["yoy"], 50.0)
+
+    def test_collector_rows_must_be_valid_unique_chronological_months(self):
+        valid = [{"period": "2026-01-01", "index": 100.0}, {"period": "2026-02-01", "index": 101.0}]
+        _validate_index_rows("PPI", valid)
+        for rows in (
+            [{"period": "2026-01-01", "index": 100.0}, {"period": "2026-01-01", "index": 101.0}],
+            [{"period": "2026-02-01", "index": 101.0}, {"period": "2026-01-01", "index": 100.0}],
+            [{"period": "2026-01-15", "index": 100.0}],
+            [{"period": "2026-01-01", "index": float("nan")}],
+        ):
+            with self.subTest(rows=rows):
+                with self.assertRaises(DcsError):
+                    _validate_index_rows("PPI", rows)
 
     def test_percent_change(self):
         self.assertAlmostEqual(percent_change(110, 100), 10.0)

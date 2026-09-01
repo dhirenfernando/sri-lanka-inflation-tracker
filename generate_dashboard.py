@@ -1,7 +1,6 @@
 """Generate the primary static dashboard from the local SQLite history."""
 from __future__ import annotations
 
-import html
 import json
 import sqlite3
 from pathlib import Path
@@ -35,29 +34,46 @@ def latest(rows: list[dict[str, object]], series: str, metric: str) -> dict[str,
     return matches[-1]
 
 
+def value_for_period(rows: list[dict[str, object]], series: str, period: object, metric: str) -> object | None:
+    return next((row["value"] for row in rows if row["series"] == series and row["period"] == period and row["metric"] == metric), None)
+
+
 def card_summary(rows: list[dict[str, object]], series: str) -> dict[str, object]:
     index = latest(rows, series, "index")
-    yoy = latest(rows, series, "yoy")
-    mom = latest(rows, series, "mom")
-    return {"series": series, "period": index["period"], "index": index["value"], "yoy": yoy["value"], "mom": mom["value"]}
+    return {
+        "series": series,
+        "period": index["period"],
+        "index": index["value"],
+        "yoy": value_for_period(rows, series, index["period"], "yoy"),
+        "mom": value_for_period(rows, series, index["period"], "mom"),
+    }
 
 
 def change_summary(rows: list[dict[str, object]], series: str, metric: str) -> dict[str, object]:
     values = [row for row in rows if row["series"] == series and row["metric"] == metric]
+    if len(values) < 2:
+        raise RuntimeError(f"Need two {metric} observations for {series} callout")
     current, previous = values[-1], values[-2]
     return {"current": current["value"], "previous": previous["value"], "change": float(current["value"]) - float(previous["value"])}
 
 
-def _page(rows: list[dict[str, object]]) -> str:
+def dashboard_payload(rows: list[dict[str, object]]) -> dict[str, object]:
     cards = [card_summary(rows, series) for series in ("CCPI", "NCPI", "PPI")]
-    changes = {
-        "ccpi": change_summary(rows, "CCPI", "yoy"),
-        "ncpi": change_summary(rows, "NCPI", "yoy"),
-        "ppi": card_summary(rows, "PPI"),
+    return {
+        "cards": cards,
+        "changes": {
+            "ccpi": change_summary(rows, "CCPI", "yoy"),
+            "ncpi": change_summary(rows, "NCPI", "yoy"),
+            "ppi": cards[2],
+        },
     }
+
+
+def _page(rows: list[dict[str, object]]) -> str:
+    payload = dashboard_payload(rows)
     embedded_rows = json.dumps(rows, separators=(",", ":"), sort_keys=True)
-    embedded_cards = json.dumps(cards, separators=(",", ":"), sort_keys=True)
-    embedded_changes = json.dumps(changes, separators=(",", ":"), sort_keys=True)
+    embedded_cards = json.dumps(payload["cards"], separators=(",", ":"), sort_keys=True)
+    embedded_changes = json.dumps(payload["changes"], separators=(",", ":"), sort_keys=True)
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -99,14 +115,14 @@ def _page(rows: list[dict[str, object]]) -> str:
 const DATA={embedded_rows}; const CARDS={embedded_cards}; const CHANGES={embedded_changes}; const DEFAULT_RANGE_MONTHS={DEFAULT_RANGE_MONTHS};
 const MAX_RANGE_MONTHS=36; const charts={{}}; const color={{CCPI:'#1666a8',NCPI:'#d95732',PPI:'#27835c'}}; let rangeMonths=DEFAULT_RANGE_MONTHS; let currentVisible=[];
 const fmtPeriod=(period)=>new Date(period+'T00:00:00Z').toLocaleDateString(undefined,{{month:'short',year:'numeric',timeZone:'UTC'}});
-const fmtPct=(value)=>`${{Number(value).toFixed(1)}}%`; const fmtIndex=(value,series)=>Number(value).toFixed(series==='PPI'?2:1);
+const unavailable=(value)=>value===null||value===undefined; const fmtPct=(value)=>unavailable(value)?'N/A':`${{Number(value).toFixed(1)}}%`; const fmtIndex=(value,series)=>unavailable(value)?'N/A':Number(value).toFixed(series==='PPI'?2:1);
 const maxPeriod=DATA.reduce((latest,row)=>row.period>latest?row.period:latest,DATA[0].period).slice(0,7); const minPeriod=DATA.reduce((earliest,row)=>row.period<earliest?row.period:earliest,DATA[0].period).slice(0,7);
 function monthShift(period, months) {{ const d=new Date(period+'T00:00:00Z'); d.setUTCMonth(d.getUTCMonth()-months+1); return d.toISOString().slice(0,7); }}
 function clampMonth(period,lower,upper) {{ return period<lower?lower:(period>upper?upper:period); }}
 function resolveRange() {{ if(rangeMonths!==null) return {{from:monthShift(maxPeriod,rangeMonths),to:maxPeriod,note:''}}; const requestedFrom=document.querySelector('#from').value; const requestedTo=document.querySelector('#to').value; const to=clampMonth(requestedTo||maxPeriod,minPeriod,maxPeriod); let from=clampMonth(requestedFrom||monthShift(to,DEFAULT_RANGE_MONTHS),minPeriod,to); let note=''; if(requestedFrom&&requestedFrom>to) {{ from=clampMonth(monthShift(to,DEFAULT_RANGE_MONTHS),minPeriod,to); note='Start date reset because it was after the end date.'; }} const earliestAllowed=clampMonth(monthShift(to,MAX_RANGE_MONTHS),minPeriod,to); if(from<earliestAllowed) {{ from=earliestAllowed; note=`Custom range limited to ${{MAX_RANGE_MONTHS}} months.`; }} return {{from,to,note}}; }}
 function filtered(range) {{ return DATA.filter(row=>row.period.slice(0,7)>=range.from&&row.period.slice(0,7)<=range.to); }}
-function renderCards() {{ document.querySelector('#cards').innerHTML=CARDS.map(card=>`<article class="card"><h3>${{card.series}} Index</h3><div class="metric">${{fmtIndex(card.index,card.series)}}</div><p class="positive">YoY ${{fmtPct(card.yoy)}} · MoM ${{fmtPct(card.mom)}}</p><p class="meta">Latest period: ${{fmtPeriod(card.period)}}</p></article>`).join(''); }}
-function direction(value) {{ return value>=0?'positive':'negative'; }}
+function renderCards() {{ document.querySelector('#cards').innerHTML=CARDS.map(card=>`<article class="card"><h3>${{card.series}} Index</h3><div class="metric">${{fmtIndex(card.index,card.series)}}</div><p class="${{unavailable(card.yoy)&&unavailable(card.mom)?'meta':'positive'}}">YoY ${{fmtPct(card.yoy)}} · MoM ${{fmtPct(card.mom)}}</p><p class="meta">Latest period: ${{fmtPeriod(card.period)}}</p></article>`).join(''); }}
+function direction(value) {{ return unavailable(value)?'':(value>=0?'positive':'negative'); }}
 function renderCallouts() {{ for(const [id,change] of Object.entries(CHANGES)) {{ if(id==='ppi') {{ document.querySelector('#ppi-callout').innerHTML=`Current index: <strong>${{fmtIndex(change.index,'PPI')}}</strong> · MoM: <span class="${{direction(change.mom)}}">${{fmtPct(change.mom)}}</span> · YoY: ${{fmtPct(change.yoy)}}`; continue; }} const delta=(change.change>=0?'+':'')+change.change.toFixed(1); document.querySelector('#'+id+'-callout').innerHTML=`Current: <strong>${{fmtPct(change.current)}}</strong> · Previous month: ${{fmtPct(change.previous)}} · <span class="${{direction(change.change)}}">Change: ${{delta}} percentage points</span>`; }} }}
 function rows(series,metric,visible) {{ return visible.filter(row=>row.series===series&&row.metric===metric); }}
 function line(canvasId,datasets,yTitle) {{ if(charts[canvasId]) charts[canvasId].destroy(); const labels=[...new Set(datasets.flatMap(set=>set.rows.map(row=>row.period)))].sort(); charts[canvasId]=new Chart(document.querySelector('#'+canvasId),{{type:'line',data:{{labels,datasets:datasets.map(set=>({{label:set.label,data:labels.map(label=>{{const found=set.rows.find(row=>row.period===label);return found?found.value:null;}}),borderColor:set.color,backgroundColor:set.color,borderWidth:2.25,pointRadius:(ctx)=>ctx.dataIndex===labels.length-1?3:0,pointHoverRadius:5,spanGaps:false,tension:.18}}))}},options:{{responsive:true,maintainAspectRatio:false,interaction:{{mode:'index',intersect:false}},plugins:{{legend:{{display:datasets.length>1,position:'top',align:'end',labels:{{boxWidth:12,usePointStyle:true}}}},tooltip:{{callbacks:{{title:(items)=>fmtPeriod(items[0].label),label:(item)=>`${{item.dataset.label}}: ${{yTitle.includes('%')?fmtPct(item.raw):Number(item.raw).toFixed(yTitle==='Index level'?2:1)}}`}}}}}},scales:{{x:{{grid:{{display:false}},ticks:{{autoSkip:true,maxTicksLimit:7,maxRotation:0,minRotation:0,callback:(value,index)=>fmtPeriod(labels[index])}}}},y:{{title:{{display:true,text:yTitle}},ticks:{{callback:(value)=>yTitle.includes('%')?value+'%':value}}}}}}}}}}); }}

@@ -1,12 +1,36 @@
 """Fetch the three DCS series and update the local work-tracker database."""
 from __future__ import annotations
 from datetime import date
+import math
 from pathlib import Path
 from src.calculations import percent_change
 from src.dcs import DcsError, fetch_ccpi, fetch_ncpi, fetch_ppi
 from src.storage import connect, replace_index_rows, upsert_index_rows
 
 DB_PATH = Path(__file__).parent / "data" / "inflation.sqlite3"
+
+
+def _validate_index_rows(code: str, rows: list[dict]) -> None:
+    """Fail before storage when a collector result is not an ordered monthly index series."""
+    if not rows:
+        raise DcsError(f"{code}: collector returned no rows")
+    periods: list[str] = []
+    for row in rows:
+        period = row.get("period")
+        try:
+            parsed = date.fromisoformat(period)
+        except (TypeError, ValueError) as error:
+            raise DcsError(f"{code}: invalid observation period {period!r}") from error
+        if period != parsed.isoformat() or parsed.day != 1:
+            raise DcsError(f"{code}: period is not the first day of an ISO calendar month: {period!r}")
+        value = row.get("index")
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) or value <= 0:
+            raise DcsError(f"{code}: invalid index value for {period}: {value!r}")
+        periods.append(period)
+    if len(periods) != len(set(periods)):
+        raise DcsError(f"{code}: duplicate observation periods")
+    if periods != sorted(periods):
+        raise DcsError(f"{code}: observation periods are not chronological")
 
 
 def _shift_calendar_month(period: str, months: int) -> str:
@@ -30,6 +54,7 @@ def main() -> int:
         results = []
         for code, fetch in sources:
             rows, url = fetch()
+            _validate_index_rows(code, rows)
             if code == "PPI":
                 rows = _derive_ppi(rows)
                 replace_index_rows(db, code, rows, url)

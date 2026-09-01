@@ -26,10 +26,18 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install -r requirements.txt
+      - name: Snapshot published data before refresh
+        run: cp data/inflation.sqlite3 "$RUNNER_TEMP/pre-refresh.sqlite3"
       - run: python update_data.py
       - name: Run full regression suite
+        env:
+          PRE_REFRESH_DATABASE: ${{ runner.temp }}/pre-refresh.sqlite3
         run: python -m unittest discover -s tests -v
       - run: python generate_dashboard.py
+      - name: Verify generated Pages artifact
+        env:
+          CHECK_GENERATED_ARTIFACT: "1"
+        run: python -m unittest discover -s tests -p 'test_static_dashboard.py' -v
       - name: Commit refreshed public data when changed
         run: |
           if git diff --quiet -- data/inflation.sqlite3 docs/index.html; then exit 0; fi
